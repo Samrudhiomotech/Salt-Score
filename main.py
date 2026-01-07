@@ -504,9 +504,9 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 if not st.session_state.model_available:
-    st.warning("System Status: Using advanced image analysis (AI model not available)")
+    st.warning("**System Status**: Using advanced image analysis (AI model not available)")
 else:
-    st.success("System Status: AI model loaded successfully!")
+    st.success("**System Status**: AI model loaded successfully!")
 
 col1, col2 = st.columns([1, 1], gap="medium")
 
@@ -526,7 +526,7 @@ with col1:
         st.markdown("""
         <div class="upload-area">
             <div style="position: relative; z-index: 1;">
-                <div style="font-size: 4em; color: #3b82f6;"></div>
+                <div style="font-size: 4em; color: #3b82f6;">📷</div>
                 <div style="font-size: 1.3em; font-weight: 600; color: #1e40af;">Drag & Drop Image Here</div>
                 <div style="color: #64748b; font-size: 0.95em;">or click to browse</div>
                 <div style="color: #94a3b8; font-size: 0.85em; margin-top: 15px;">
@@ -575,7 +575,7 @@ with col1:
     col_btn1, col_btn2, col_btn3 = st.columns(3)
     
     with col_btn1:
-        if st.button('Analyze Image', key='analyze'):
+        if st.button('🔍 Analyze Image', key='analyze'):
             if st.session_state.uploaded_image is not None:
                 with st.spinner('Processing image analysis...'):
                     results = analyze_image_comprehensive(
@@ -583,22 +583,22 @@ with col1:
                         st.session_state.selected_region
                     )
                     st.session_state.analysis_results = results
-                st.success('Analysis completed!')
+                st.success('✅ Analysis completed!')
             else:
-                st.error('Please upload an image first!')
+                st.error('⚠️ Please upload an image first!')
     
     with col_btn2:
-        if st.button('Clear', key='clear'):
+        if st.button('🗑️ Clear', key='clear'):
             st.session_state.uploaded_image = None
             st.session_state.analysis_results = None
             st.rerun()
     
     with col_btn3:
-        if st.button('Download Report', key='download'):
+        if st.button('📥 Download Report', key='download'):
             if st.session_state.analysis_results:
-                st.info('Report generation feature coming soon!')
+                st.info('📄 Report generation feature coming soon!')
             else:
-                st.warning('Please analyze an image first!')
+                st.warning('⚠️ Please analyze an image first!')
     
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -611,9 +611,9 @@ with col2:
         
         # Show analysis method
         if not results['model_used']:
-            st.info("Analysis Method: Advanced Image Processing")
+            st.info("📊 Analysis Method: Advanced Image Processing")
         else:
-            st.success("Analysis Method: AI Model + Image Processing")
+            st.success("🤖 Analysis Method: AI Model + Image Processing")
         
         # Display Hair Type with clear badge
         if results['is_bald']:
@@ -622,7 +622,7 @@ with col2:
                         padding: 20px; border-radius: 12px; margin: 15px 0; 
                         border: 2px solid #ef4444; text-align: center;">
                 <div style="font-size: 1.8em; font-weight: 700; color: #991b1b;">
-                    {results['hair_type']}
+                    ⚠️ {results['hair_type']}
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -632,7 +632,7 @@ with col2:
                         padding: 20px; border-radius: 12px; margin: 15px 0; 
                         border: 2px solid #10b981; text-align: center;">
                 <div style="font-size: 1.8em; font-weight: 700; color: #065f46;">
-                    {results['hair_type']}
+                    ✅ {results['hair_type']}
                 </div>
             </div>
             """, unsafe_allow_html=True)
@@ -683,7 +683,7 @@ with col2:
         if not results['is_bald']:
             st.markdown("""
             <div class="info-box">
-                <strong>Normal Hair Pattern Detected</strong><br><br>
+                <strong>✅ Normal Hair Pattern Detected</strong><br><br>
                 No significant signs of alopecia areata detected. The scalp shows normal 
                 follicle distribution and healthy hair density.<br><br>
                 <strong>Recommendations:</strong>
@@ -700,7 +700,7 @@ with col2:
             if results['severity'] == "Mild Severity":
                 st.markdown("""
                 <div class="info-box">
-                    <strong>Mild Alopecia Areata (S1 - SALT Score < 25%)</strong><br><br>
+                    <strong>⚠️ Mild Alopecia Areata (S1 - SALT Score < 25%)</strong><br><br>
                     Limited hair loss detected. Early intervention typically yields good results.<br><br>
                     <strong>Recommended Actions:</strong>
                     <ul>
@@ -714,7 +714,7 @@ with col2:
             elif results['severity'] == "Moderate Severity":
                 st.markdown("""
                 <div class="warning-box">
-                    <strong>Moderate Alopecia Areata (S2 - SALT Score 25-50%)</strong><br><br>
+                    <strong>⚠️ Moderate Alopecia Areata (S2 - SALT Score 25-50%)</strong><br><br>
                     Significant hair loss detected requiring comprehensive treatment.<br><br>
                     <strong>Recommended Actions:</strong>
                     <ul>
@@ -729,7 +729,7 @@ with col2:
             else:
                 st.markdown("""
                 <div class="error-box">
-                    <strong>Severe Alopecia Areata (S3-S4 - SALT Score > 50%)</strong><br><br>
+                    <strong>🚨 Severe Alopecia Areata (S3-S4 - SALT Score > 50%)</strong><br><br>
                     Extensive hair loss detected requiring urgent intervention.<br><br>
                     <strong>Urgent Actions Required:</strong>
                     <ul>
@@ -747,7 +747,7 @@ with col2:
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown("<h3 style='color: #1e293b;'>Understanding Your Results</h3>", unsafe_allow_html=True)
         
-        with st.expander("About Hair Classification", expanded=False):
+        with st.expander("📋 About Hair Classification", expanded=False):
             st.markdown("""
             **Hair Classification System:**
             
@@ -759,7 +759,7 @@ with col2:
             """)
         
         if results['is_bald'] and results['show_score']:
-            with st.expander("What is SALT Score?", expanded=False):
+            with st.expander("📊 What is SALT Score?", expanded=False):
                 st.markdown("""
                 The **Severity of Alopecia Tool (SALT)** is a standardized clinical scoring system:
                 
@@ -778,7 +778,7 @@ with col2:
                 The score helps doctors track progression and treatment effectiveness.
                 """)
         
-        with st.expander("Follicle Density Analysis", expanded=False):
+        with st.expander("🔬 Follicle Density Analysis", expanded=False):
             st.markdown(f"""
             **Your Follicle Density:** {results['follicle_density']} follicles/cm²
             
@@ -795,7 +795,7 @@ with col2:
             """)
         
         if results['is_bald']:
-            with st.expander("Treatment Options", expanded=False):
+            with st.expander("💊 Treatment Options", expanded=False):
                 st.markdown("""
                 **Common Treatment Approaches:**
                 
@@ -819,7 +819,7 @@ with col2:
                 Always consult with a board-certified dermatologist.
                 """)
         
-        with st.expander("About Alopecia Areata", expanded=False):
+        with st.expander("ℹ️ About Alopecia Areata", expanded=False):
             st.markdown("""
             **What is Alopecia Areata?**
             
@@ -849,7 +849,7 @@ with col2:
     else:
         st.markdown("""
         <div class="empty-state">
-            <div style="font-size: 5em; margin-bottom: 20px; opacity: 0.3;"></div>
+            <div style="font-size: 5em; margin-bottom: 20px; opacity: 0.3;">📊</div>
             <div style="font-size: 1.4em; font-weight: 600; color: #64748b; margin-bottom: 12px;">
                 No Analysis Available
             </div>
@@ -865,7 +865,7 @@ with col2:
 st.markdown("""
 <div style="text-align: center; color: white; padding: 30px 20px; margin-top: 40px;">
     <div style="font-size: 1.1em; font-weight: 600; margin-bottom: 10px;">
-        Medical Disclaimer
+        ⚕️ Medical Disclaimer
     </div>
     <div style="opacity: 0.8; line-height: 1.8;">
         This AI-powered system assists in alopecia areata assessment.<br>
