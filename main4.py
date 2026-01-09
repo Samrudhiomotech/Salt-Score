@@ -638,25 +638,11 @@ if not st.session_state.show_analysis_page:
         st.markdown('</div>', unsafe_allow_html=True)
     
     with col2:
-        st.markdown('<div class="card"><div class="card-title">About This System</div>', unsafe_allow_html=True)
+        st.markdown('<div class="card"><div class="card-title">Get Started</div>', unsafe_allow_html=True)
         
         st.markdown("""
-        <div style='color: #475569; line-height: 1.8; font-size: 0.95em;'>
-            <p style='margin-bottom: 15px; font-weight: 500;'>This advanced system provides:</p>
-            
-            <p style='margin-bottom: 10px;'><strong>AI-Powered Detection:</strong> Analyze scalp images to detect alopecia areata patterns</p>
-            
-            <p style='margin-bottom: 10px;'><strong>SALT Scoring:</strong> Standardized Severity of Alopecia Tool scoring system for objective assessment</p>
-            
-            <p style='margin-bottom: 10px;'><strong>Follicle Analysis:</strong> Advanced computer vision for follicle density calculation</p>
-            
-            <p style='margin-bottom: 10px;'><strong>Regional Assessment:</strong> Analyze specific scalp regions (Vertex, Frontal, Temporal, etc.)</p>
-            
-            <p style='margin-bottom: 15px;'><strong>Clinical Guidance:</strong> Evidence-based recommendations and treatment information</p>
-            
-            <p style='color: #991b1b; font-weight: 600; padding: 15px; background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); border-radius: 10px; border-left: 4px solid #ef4444;'>
-                Disclaimer: This system assists in assessment and should not replace professional medical diagnosis. Always consult with a board-certified dermatologist.
-            </p>
+        <div style='color: #475569; line-height: 1.8; font-size: 0.95em; text-align: center; padding: 40px 20px;'>
+            <p style='margin: 0; color: #64748b; font-size: 1.1em;'>Upload a model or use the default model to begin analysis</p>
         </div>
         """, unsafe_allow_html=True)
         
