@@ -6,6 +6,7 @@ import io
 from datetime import datetime
 import os
 import warnings
+import tempfile
 
 # Suppress warnings
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -192,6 +193,30 @@ st.markdown("""
         border: 2px solid #3b82f6;
     }
     
+    .model-status {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 15px 20px;
+        background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+        border-radius: 12px;
+        border: 2px solid #3b82f6;
+        margin: 15px 0;
+        font-weight: 500;
+    }
+    
+    .model-status.ready {
+        background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%);
+        border-color: #22c55e;
+        color: #166534;
+    }
+    
+    .model-status.pending {
+        background: linear-gradient(135deg, #fef3c7 0%, #fcd34d 100%);
+        border-color: #f59e0b;
+        color: #92400e;
+    }
+    
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     .stDeployButton {display:none;}
@@ -207,8 +232,13 @@ if 'analysis_results' not in st.session_state:
     st.session_state.analysis_results = None
 if 'model_available' not in st.session_state:
     st.session_state.model_available = False
+if 'hair_classifier_model' not in st.session_state:
+    st.session_state.hair_classifier_model = None
+if 'model_loaded_from_upload' not in st.session_state:
+    st.session_state.model_loaded_from_upload = False
+if 'show_analysis_page' not in st.session_state:
+    st.session_state.show_analysis_page = False
 
-@st.cache_resource
 def load_hair_classifier_model():
     """Load the hair classification model if available"""
     if not TF_AVAILABLE:
@@ -226,15 +256,13 @@ def load_hair_classifier_model():
             if os.path.exists(model_path):
                 hair_model = keras.models.load_model(model_path)
                 st.session_state.model_available = True
+                st.session_state.hair_classifier_model = hair_model
                 return hair_model
         except Exception as e:
             continue
     
     st.session_state.model_available = False
     return None
-
-# Load model
-hair_classifier_model = load_hair_classifier_model()
 
 def preprocess_image(image, target_size=(224, 224)):
     """Preprocess image for model prediction"""
@@ -252,41 +280,30 @@ def detect_patches_advanced(image):
     try:
         img_array = np.array(image)
         
-        # Convert to grayscale
         if len(img_array.shape) == 3:
             gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
         else:
             gray = img_array
         
-        # CLAHE enhancement
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
         enhanced = clahe.apply(gray)
         
-        # Multiple thresholding approaches
         _, thresh1 = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
         
-        # More conservative adaptive threshold
         thresh2 = cv2.adaptiveThreshold(enhanced, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
                                         cv2.THRESH_BINARY_INV, 15, 3)
         
-        # Combine thresholds - require agreement from both methods
         combined = cv2.bitwise_and(thresh1, thresh2)
         
-        # Morphological operations to clean up noise
         kernel_small = np.ones((3,3), np.uint8)
         kernel_large = np.ones((7,7), np.uint8)
         
-        # Remove small noise
         morphed = cv2.morphologyEx(combined, cv2.MORPH_OPEN, kernel_small, iterations=2)
-        
-        # Close gaps in patches
         morphed = cv2.morphologyEx(morphed, cv2.MORPH_CLOSE, kernel_large, iterations=2)
         
-        # Find contours
         contours, _ = cv2.findContours(morphed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # More strict filtering for valid bald patches
-        min_area = 500  # Increased from 150 - only detect significant patches
+        min_area = 500
         max_area = 40000
         valid_patches = []
         
@@ -295,10 +312,8 @@ def detect_patches_advanced(image):
             if min_area < area < max_area:
                 perimeter = cv2.arcLength(cnt, True)
                 if perimeter > 0:
-                    # Calculate circularity (bald patches tend to be round)
                     circularity = 4 * np.pi * area / (perimeter ** 2)
                     
-                    # Calculate solidity (filled vs convex hull)
                     hull = cv2.convexHull(cnt)
                     hull_area = cv2.contourArea(hull)
                     if hull_area > 0:
@@ -306,7 +321,6 @@ def detect_patches_advanced(image):
                     else:
                         solidity = 0
                     
-                    # Only accept patches that are reasonably circular and solid
                     if circularity > 0.4 and solidity > 0.7:
                         valid_patches.append(cnt)
         
@@ -320,27 +334,22 @@ def calculate_follicle_density_advanced(image):
     try:
         img_array = np.array(image)
         
-        # Convert to grayscale
         if len(img_array.shape) == 3:
             gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
         else:
             gray = img_array
         
-        # Edge detection
         blurred = cv2.GaussianBlur(gray, (3, 3), 0)
         edges_canny = cv2.Canny(blurred, 30, 100)
         
-        # Sobel edge detection
         sobelx = cv2.Sobel(blurred, cv2.CV_64F, 1, 0, ksize=3)
         sobely = cv2.Sobel(blurred, cv2.CV_64F, 0, 1, ksize=3)
         edges_sobel = np.sqrt(sobelx**2 + sobely**2)
         edges_sobel = np.uint8(edges_sobel / (edges_sobel.max() + 1e-8) * 255)
         
-        # Combine edges
         combined_edges = cv2.bitwise_or(edges_canny, edges_sobel)
         follicle_count = np.sum(combined_edges > 0)
         
-        # Calculate density
         image_area_pixels = gray.shape[0] * gray.shape[1]
         assumed_scalp_area_cm2 = 100
         
@@ -370,7 +379,6 @@ def calculate_salt_score_enhanced(hair_loss_pct, region, follicle_density):
         weight = region_weights.get(region, 0.1)
         weighted_score = base_score * (1 + weight * 2)
         
-        # Density factor
         normal_density = 50
         density_factor = max(0, (normal_density - follicle_density) / normal_density * 15)
         
@@ -394,24 +402,19 @@ def classify_hair_type_advanced(image):
         else:
             gray = img_array
         
-        # Calculate image statistics
         image_variance = np.var(gray)
         hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
         hist_normalized = hist / (hist.sum() + 1e-8)
         entropy = -np.sum(hist_normalized * np.log2(hist_normalized + 1e-8))
         
-        # Calculate hair texture (high texture = more hair)
         laplacian = cv2.Laplacian(gray, cv2.CV_64F)
         texture_variance = np.var(laplacian)
         
-        # Edge density (more edges = more hair strands)
         edges = cv2.Canny(gray, 50, 150)
         edge_density = np.sum(edges > 0) / (gray.shape[0] * gray.shape[1])
         
-        # Scoring system (higher score = more likely to have hair)
         hair_score = 0
         
-        # Factor 1: Follicle density (weight: 30%)
         if follicle_density > 55:
             hair_score += 30
         elif follicle_density > 40:
@@ -419,7 +422,6 @@ def classify_hair_type_advanced(image):
         elif follicle_density > 30:
             hair_score += 10
         
-        # Factor 2: Texture variance (weight: 25%)
         if texture_variance > 100:
             hair_score += 25
         elif texture_variance > 50:
@@ -427,7 +429,6 @@ def classify_hair_type_advanced(image):
         elif texture_variance > 20:
             hair_score += 5
         
-        # Factor 3: Edge density (weight: 25%)
         if edge_density > 0.15:
             hair_score += 25
         elif edge_density > 0.10:
@@ -435,7 +436,6 @@ def classify_hair_type_advanced(image):
         elif edge_density > 0.05:
             hair_score += 5
         
-        # Factor 4: Entropy (weight: 20%)
         if entropy > 6.5:
             hair_score += 20
         elif entropy > 5.5:
@@ -443,17 +443,12 @@ def classify_hair_type_advanced(image):
         elif entropy > 4.5:
             hair_score += 5
         
-        # Penalty for detected bald patches
         if num_patches > 3:
             hair_score -= 40
         elif num_patches > 1:
             hair_score -= 20
         elif num_patches > 0:
             hair_score -= 10
-        
-        # Classification based on score
-        # Score > 50 = Normal Hair (not bald)
-        # Score <= 50 = Bald (alopecia detected)
         
         if hair_score > 50:
             confidence = min(0.6 + (hair_score - 50) * 0.008, 0.95)
@@ -468,15 +463,14 @@ def classify_hair_type_advanced(image):
 
 def classify_hair_type(image):
     """Classify hair as bald or notbald"""
-    if hair_classifier_model is not None and st.session_state.model_available:
+    if st.session_state.hair_classifier_model is not None and st.session_state.model_available:
         try:
             processed_img = preprocess_image(image)
             if processed_img is None:
                 return classify_hair_type_advanced(image)
                 
-            prediction = hair_classifier_model.predict(processed_img, verbose=0)[0]
+            prediction = st.session_state.hair_classifier_model.predict(processed_img, verbose=0)[0]
             
-            # Handle model output
             if len(prediction) == 2:
                 bald_prob = float(prediction[0])
                 notbald_prob = float(prediction[1])
@@ -508,7 +502,6 @@ def analyze_image_comprehensive(image, region):
         is_bald = (hair_type.lower() == "bald")
 
         if is_bald:
-            # Calculate metrics for bald scalp
             hair_loss_pct = min(confidence * 100 + num_patches * 2, 95)
             salt_score = calculate_salt_score_enhanced(hair_loss_pct, region, follicle_density)
             
@@ -544,7 +537,6 @@ def analyze_image_comprehensive(image, region):
                 'model_used': st.session_state.model_available
             }
         else:
-            # Not bald
             return {
                 'hair_type': 'Not Bald (Normal Hair)',
                 'confidence': round(confidence * 100, 1),
@@ -563,347 +555,464 @@ def analyze_image_comprehensive(image, region):
         st.error(f"Analysis error: {e}")
         return None
 
-# Header
-st.markdown("""
-<div class="header-container">
-    <h1 class="main-title">Alopecia Areata Detection System</h1>
-    <p class="subtitle">AI-Powered Hair Classification & SALT Scoring | Developed by Sarthak Dhole</p>
-</div>
-""", unsafe_allow_html=True)
+# Load default model
+load_hair_classifier_model()
 
-# Status indicator (only show if model is loaded)
-if st.session_state.model_available:
-    st.success("System Status: AI model loaded successfully!")
-
-# Main layout
-col1, col2 = st.columns([1, 1], gap="medium")
-
-with col1:
-    st.markdown('<div class="card"><div class="card-title">Image Upload</div>', unsafe_allow_html=True)
+# Check if we should show the model upload page or analysis page
+if not st.session_state.show_analysis_page:
+    # Model Upload Page
+    st.markdown("""
+    <div class="header-container">
+        <h1 class="main-title">Alopecia Areata Detection System</h1>
+        <p class="subtitle">AI-Powered Hair Classification & SALT Scoring | Developed by Sarthak Dhole</p>
+    </div>
+    """, unsafe_allow_html=True)
     
-    uploaded_file = st.file_uploader(
-        "Choose an image...",
-        type=['jpg', 'jpeg', 'png'],
-        label_visibility="collapsed",
-        key="file_uploader"
-    )
+    col1, col2 = st.columns([1, 1], gap="medium")
     
-    if uploaded_file is not None:
-        try:
-            st.session_state.uploaded_image = Image.open(uploaded_file).convert('RGB')
-            st.image(st.session_state.uploaded_image, width='stretch')
-        except Exception as e:
-            st.error(f"Error loading image: {e}")
-            st.session_state.uploaded_image = None
-    else:
-        st.info("Upload a scalp image to begin analysis")
-    
-    # Region Selection
-    st.markdown('<div style="margin-top: 20px;"><strong>Select Scalp Region:</strong></div>', unsafe_allow_html=True)
-    
-    col_a, col_b, col_c = st.columns(3)
-    col_d, col_e, col_f = st.columns(3)
-    col_g, _, _ = st.columns(3)
-    
-    with col_a:
-        if st.button('Vertex', key='btn_vertex', width='stretch'):
-            st.session_state.selected_region = 'Vertex'
-    with col_b:
-        if st.button('Frontal', key='btn_frontal', width='stretch'):
-            st.session_state.selected_region = 'Frontal'
-    with col_c:
-        if st.button('R. Temporal', key='btn_rt', width='stretch'):
-            st.session_state.selected_region = 'R. Temporal'
-    
-    with col_d:
-        if st.button('L. Temporal', key='btn_lt', width='stretch'):
-            st.session_state.selected_region = 'L. Temporal'
-    with col_e:
-        if st.button('R. Parietal', key='btn_rp', width='stretch'):
-            st.session_state.selected_region = 'R. Parietal'
-    with col_f:
-        if st.button('L. Parietal', key='btn_lp', width='stretch'):
-            st.session_state.selected_region = 'L. Parietal'
-    
-    with col_g:
-        if st.button('Occipital', key='btn_occ', width='stretch'):
-            st.session_state.selected_region = 'Occipital'
-    
-    st.markdown(f'<div class="selected-region">Selected Region: {st.session_state.selected_region}</div>', unsafe_allow_html=True)
-    
-    # Action Buttons
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    col_btn1, col_btn2 = st.columns(2)
-    
-    with col_btn1:
-        if st.button('Analyze Image', key='analyze', width='stretch'):
-            if st.session_state.uploaded_image is not None:
-                with st.spinner('Processing image analysis...'):
-                    results = analyze_image_comprehensive(
-                        st.session_state.uploaded_image,
-                        st.session_state.selected_region
-                    )
-                    if results:
-                        st.session_state.analysis_results = results
-                        st.success('Analysis completed!')
-                    else:
-                        st.error('Analysis failed. Please try again.')
-            else:
-                st.error('Please upload an image first!')
-    
-    with col_btn2:
-        if st.button('Clear', key='clear', width='stretch'):
-            st.session_state.uploaded_image = None
-            st.session_state.analysis_results = None
-            st.rerun()
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# Right Column - Results
-with col2:
-    st.markdown('<div class="card"><div class="card-title">Analysis Results</div>', unsafe_allow_html=True)
-    
-    if st.session_state.analysis_results:
-        results = st.session_state.analysis_results
+    with col1:
+        st.markdown('<div class="card"><div class="card-title">Model Setup</div>', unsafe_allow_html=True)
         
-        # Analysis method
-        if not results['model_used']:
-            st.info("Analysis Method: Advanced Image Processing")
-        else:
-            st.success("Analysis Method: AI Model + Image Processing")
+        st.markdown("<p style='color: #475569; font-size: 1.05em; margin-bottom: 20px;'>Select how you want to proceed with the analysis:</p>", unsafe_allow_html=True)
         
-        # Hair Type Badge
-        if results['is_bald']:
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); 
-                        padding: 20px; border-radius: 12px; margin: 15px 0; 
-                        border: 2px solid #ef4444; text-align: center;">
-                <div style="font-size: 1.8em; font-weight: 700; color: #991b1b;">
-                    {results['hair_type']}
-                </div>
+        # Current Model Status
+        if st.session_state.model_available and not st.session_state.model_loaded_from_upload:
+            st.markdown("""
+            <div class="model-status ready">
+                <span>Pre-trained Model: Ready to Use</span>
+                <span style="font-size: 1.2em; color: #22c55e;">✓</span>
             </div>
             """, unsafe_allow_html=True)
-        else:
-            st.markdown(f"""
-            <div style="background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); 
-                        padding: 20px; border-radius: 12px; margin: 15px 0; 
-                        border: 2px solid #10b981; text-align: center;">
-                <div style="font-size: 1.8em; font-weight: 700; color: #065f46;">
-                    {results['hair_type']}
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
+            
+            col_btn1, col_btn2 = st.columns(2)
+            
+            with col_btn1:
+                if st.button("Use Default Model", width="stretch", key="use_default"):
+                    st.session_state.show_analysis_page = True
+                    st.rerun()
+            
+            with col_btn2:
+                st.markdown("<p style='font-size: 0.9em; text-align: center; color: #64748b; margin-top: 15px;'>OR</p>", unsafe_allow_html=True)
         
-        # Confidence
-        st.markdown(f"""
-        <div class="result-item">
-            <span class="result-label">Confidence</span>
-            <span class="result-value">{results['confidence']}%</span>
+        st.markdown("<p style='font-size: 0.95em; color: #64748b; font-weight: 500; margin: 20px 0;'>Upload Your Custom Model</p>", unsafe_allow_html=True)
+        
+        uploaded_model = st.file_uploader(
+            "Choose a model file (.keras, .h5, .pb, .tflite)",
+            type=['keras', 'h5', 'pb', 'tflite'],
+            label_visibility="collapsed",
+            key="model_uploader"
+        )
+        
+        if uploaded_model is not None:
+            try:
+                with st.spinner("Loading your model..."):
+                    # Create temporary file for the model
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.keras') as tmp_file:
+                        tmp_file.write(uploaded_model.getbuffer())
+                        tmp_path = tmp_file.name
+                    
+                    # Load the model
+                    custom_model = keras.models.load_model(tmp_path)
+                    st.session_state.hair_classifier_model = custom_model
+                    st.session_state.model_available = True
+                    st.session_state.model_loaded_from_upload = True
+                    
+                    # Clean up temp file
+                    os.remove(tmp_path)
+                
+                st.markdown("""
+                <div class="model-status ready">
+                    <span>Custom Model: Successfully Loaded</span>
+                    <span style="font-size: 1.2em; color: #22c55e;">✓</span>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                if st.button("Proceed to Analysis", width="stretch", key="proceed_analysis"):
+                    st.session_state.show_analysis_page = True
+                    st.rerun()
+                    
+            except Exception as e:
+                st.error(f"Failed to load model: {str(e)}")
+                st.markdown("<p style='color: #64748b; font-size: 0.9em; margin-top: 15px;'>Please ensure the file is a valid TensorFlow/Keras model.</p>", unsafe_allow_html=True)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with col2:
+        st.markdown('<div class="card"><div class="card-title">About This System</div>', unsafe_allow_html=True)
+        
+        st.markdown("""
+        <div style='color: #475569; line-height: 1.8; font-size: 0.95em;'>
+            <p style='margin-bottom: 15px; font-weight: 500;'>This advanced system provides:</p>
+            
+            <p style='margin-bottom: 10px;'><strong>AI-Powered Detection:</strong> Analyze scalp images to detect alopecia areata patterns</p>
+            
+            <p style='margin-bottom: 10px;'><strong>SALT Scoring:</strong> Standardized Severity of Alopecia Tool scoring system for objective assessment</p>
+            
+            <p style='margin-bottom: 10px;'><strong>Follicle Analysis:</strong> Advanced computer vision for follicle density calculation</p>
+            
+            <p style='margin-bottom: 10px;'><strong>Regional Assessment:</strong> Analyze specific scalp regions (Vertex, Frontal, Temporal, etc.)</p>
+            
+            <p style='margin-bottom: 15px;'><strong>Clinical Guidance:</strong> Evidence-based recommendations and treatment information</p>
+            
+            <p style='color: #991b1b; font-weight: 600; padding: 15px; background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); border-radius: 10px; border-left: 4px solid #ef4444;'>
+                Disclaimer: This system assists in assessment and should not replace professional medical diagnosis. Always consult with a board-certified dermatologist.
+            </p>
         </div>
         """, unsafe_allow_html=True)
         
-        # Show SALT score only if bald
-        if results['is_bald'] and results['show_score']:
+        st.markdown('</div>', unsafe_allow_html=True)
+
+else:
+    # Analysis Page
+    st.markdown("""
+    <div class="header-container">
+        <h1 class="main-title">Alopecia Areata Detection System</h1>
+        <p class="subtitle">AI-Powered Hair Classification & SALT Scoring | Developed by Sarthak Dhole</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    if st.session_state.model_available:
+        if st.session_state.model_loaded_from_upload:
+            st.info("Analysis: Using your custom uploaded model")
+        else:
+            st.success("Analysis: Using pre-trained AI model")
+    
+    # Main layout
+    col1, col2 = st.columns([1, 1], gap="medium")
+    
+    with col1:
+        st.markdown('<div class="card"><div class="card-title">Image Upload</div>', unsafe_allow_html=True)
+        
+        uploaded_file = st.file_uploader(
+            "Choose an image...",
+            type=['jpg', 'jpeg', 'png'],
+            label_visibility="collapsed",
+            key="file_uploader"
+        )
+        
+        if uploaded_file is not None:
+            try:
+                st.session_state.uploaded_image = Image.open(uploaded_file).convert('RGB')
+                st.image(st.session_state.uploaded_image, width='stretch')
+            except Exception as e:
+                st.error(f"Error loading image: {e}")
+                st.session_state.uploaded_image = None
+        else:
+            st.info("Upload a scalp image to begin analysis")
+        
+        # Region Selection
+        st.markdown('<div style="margin-top: 20px;"><strong>Select Scalp Region:</strong></div>', unsafe_allow_html=True)
+        
+        col_a, col_b, col_c = st.columns(3)
+        col_d, col_e, col_f = st.columns(3)
+        col_g, _, _ = st.columns(3)
+        
+        with col_a:
+            if st.button('Vertex', key='btn_vertex', width='stretch'):
+                st.session_state.selected_region = 'Vertex'
+        with col_b:
+            if st.button('Frontal', key='btn_frontal', width='stretch'):
+                st.session_state.selected_region = 'Frontal'
+        with col_c:
+            if st.button('R. Temporal', key='btn_rt', width='stretch'):
+                st.session_state.selected_region = 'R. Temporal'
+        
+        with col_d:
+            if st.button('L. Temporal', key='btn_lt', width='stretch'):
+                st.session_state.selected_region = 'L. Temporal'
+        with col_e:
+            if st.button('R. Parietal', key='btn_rp', width='stretch'):
+                st.session_state.selected_region = 'R. Parietal'
+        with col_f:
+            if st.button('L. Parietal', key='btn_lp', width='stretch'):
+                st.session_state.selected_region = 'L. Parietal'
+        
+        with col_g:
+            if st.button('Occipital', key='btn_occ', width='stretch'):
+                st.session_state.selected_region = 'Occipital'
+        
+        st.markdown(f'<div class="selected-region">Selected Region: {st.session_state.selected_region}</div>', unsafe_allow_html=True)
+        
+        # Action Buttons
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        col_btn1, col_btn2, col_btn3 = st.columns(3)
+        
+        with col_btn1:
+            if st.button('Analyze Image', key='analyze', width='stretch'):
+                if st.session_state.uploaded_image is not None:
+                    with st.spinner('Processing image analysis...'):
+                        results = analyze_image_comprehensive(
+                            st.session_state.uploaded_image,
+                            st.session_state.selected_region
+                        )
+                        if results:
+                            st.session_state.analysis_results = results
+                            st.success('Analysis completed!')
+                        else:
+                            st.error('Analysis failed. Please try again.')
+                else:
+                    st.error('Please upload an image first!')
+        
+        with col_btn2:
+            if st.button('Clear', key='clear', width='stretch'):
+                st.session_state.uploaded_image = None
+                st.session_state.analysis_results = None
+                st.rerun()
+        
+        with col_btn3:
+            if st.button('Back to Setup', key='back_to_setup', width='stretch'):
+                st.session_state.show_analysis_page = False
+                st.session_state.uploaded_image = None
+                st.session_state.analysis_results = None
+                st.rerun()
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    # Right Column - Results
+    with col2:
+        st.markdown('<div class="card"><div class="card-title">Analysis Results</div>', unsafe_allow_html=True)
+        
+        if st.session_state.analysis_results:
+            results = st.session_state.analysis_results
+            
+            # Analysis method
+            if not results['model_used']:
+                st.info("Analysis Method: Advanced Image Processing")
+            else:
+                st.success("Analysis Method: AI Model + Image Processing")
+            
+            # Hair Type Badge
+            if results['is_bald']:
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); 
+                            padding: 20px; border-radius: 12px; margin: 15px 0; 
+                            border: 2px solid #ef4444; text-align: center;">
+                    <div style="font-size: 1.8em; font-weight: 700; color: #991b1b;">
+                        {results['hair_type']}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown(f"""
+                <div style="background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%); 
+                            padding: 20px; border-radius: 12px; margin: 15px 0; 
+                            border: 2px solid #10b981; text-align: center;">
+                    <div style="font-size: 1.8em; font-weight: 700; color: #065f46;">
+                        {results['hair_type']}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Confidence
             st.markdown(f"""
             <div class="result-item">
-                <span class="result-label">SALT Score</span>
-                <span class="result-value">{results['salt_score']}</span>
-            </div>
-            <div class="result-item">
-                <span class="result-label">Hair Loss %</span>
-                <span class="result-value">{results['hair_loss_pct']}%</span>
+                <span class="result-label">Confidence</span>
+                <span class="result-value">{results['confidence']}%</span>
             </div>
             """, unsafe_allow_html=True)
-        
-        # Follicle density and region
-        st.markdown(f"""
-        <div class="result-item">
-            <span class="result-label">Follicle Density</span>
-            <span class="result-value">{results['follicle_density']}/cm²</span>
-        </div>
-        <div class="result-item">
-            <span class="result-label">Scalp Region</span>
-            <span class="result-value">{results['region'].upper()}</span>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Severity badge
-        st.markdown(f"""
-        <div class="severity-badge {results['severity_class']}">
-            {results['severity']} {' - ' + results['severity_desc'] if results['is_bald'] else ''}
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Clinical Interpretation
-        with st.expander("Clinical Interpretation", expanded=True):
-            if not results['is_bald']:
-                st.success("""
-                **Normal Hair Pattern Detected**
-                
-                No significant signs of alopecia areata detected. The scalp shows normal 
-                follicle distribution and healthy hair density.
-                
-                **Recommendations:**
-                - Continue regular hair care routine
-                - Maintain healthy diet rich in proteins and vitamins
-                - Regular monitoring every 6 months
-                - Consult dermatologist if changes occur
-                """)
-            else:
-                if results['severity'] == "Mild Severity":
-                    st.info("""
-                    **Mild Alopecia Areata (S1 - SALT Score < 25%)**
+            
+            # Show SALT score only if bald
+            if results['is_bald'] and results['show_score']:
+                st.markdown(f"""
+                <div class="result-item">
+                    <span class="result-label">SALT Score</span>
+                    <span class="result-value">{results['salt_score']}</span>
+                </div>
+                <div class="result-item">
+                    <span class="result-label">Hair Loss %</span>
+                    <span class="result-value">{results['hair_loss_pct']}%</span>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Follicle density and region
+            st.markdown(f"""
+            <div class="result-item">
+                <span class="result-label">Follicle Density</span>
+                <span class="result-value">{results['follicle_density']}/cm²</span>
+            </div>
+            <div class="result-item">
+                <span class="result-label">Scalp Region</span>
+                <span class="result-value">{results['region'].upper()}</span>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Severity badge
+            st.markdown(f"""
+            <div class="severity-badge {results['severity_class']}">
+                {results['severity']} {' - ' + results['severity_desc'] if results['is_bald'] else ''}
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Clinical Interpretation
+            with st.expander("Clinical Interpretation", expanded=True):
+                if not results['is_bald']:
+                    st.success("""
+                    Normal Hair Pattern Detected
                     
-                    Limited hair loss detected. Early intervention typically yields good results.
+                    No significant signs of alopecia areata detected. The scalp shows normal 
+                    follicle distribution and healthy hair density.
                     
-                    **Recommended Actions:**
-                    - Consult dermatologist for treatment plan
-                    - Consider topical corticosteroids or minoxidil
-                    - Monitor progress every 3-6 months
-                    - Maintain stress management practices
-                    """)
-                elif results['severity'] == "Moderate Severity":
-                    st.warning("""
-                    **Moderate Alopecia Areata (S2 - SALT Score 25-50%)**
-                    
-                    Significant hair loss detected requiring comprehensive treatment.
-                    
-                    **Recommended Actions:**
-                    - Immediate dermatologist consultation recommended
-                    - Consider systemic treatments (JAK inhibitors)
-                    - Combination therapy approach
-                    - Monthly monitoring required
-                    - Psychological support beneficial
+                    Recommendations:
+                    - Continue regular hair care routine
+                    - Maintain healthy diet rich in proteins and vitamins
+                    - Regular monitoring every 6 months
+                    - Consult dermatologist if changes occur
                     """)
                 else:
-                    st.error("""
-                    **Severe Alopecia Areata (S3-S4 - SALT Score > 50%)**
+                    if results['severity'] == "Mild Severity":
+                        st.info("""
+                        Mild Alopecia Areata (S1 - SALT Score < 25%)
+                        
+                        Limited hair loss detected. Early intervention typically yields good results.
+                        
+                        Recommended Actions:
+                        - Consult dermatologist for treatment plan
+                        - Consider topical corticosteroids or minoxidil
+                        - Monitor progress every 3-6 months
+                        - Maintain stress management practices
+                        """)
+                    elif results['severity'] == "Moderate Severity":
+                        st.warning("""
+                        Moderate Alopecia Areata (S2 - SALT Score 25-50%)
+                        
+                        Significant hair loss detected requiring comprehensive treatment.
+                        
+                        Recommended Actions:
+                        - Immediate dermatologist consultation recommended
+                        - Consider systemic treatments (JAK inhibitors)
+                        - Combination therapy approach
+                        - Monthly monitoring required
+                        - Psychological support beneficial
+                        """)
+                    else:
+                        st.error("""
+                        Severe Alopecia Areata (S3-S4 - SALT Score > 50%)
+                        
+                        Extensive hair loss detected requiring urgent intervention.
+                        
+                        Urgent Actions Required:
+                        - Immediate dermatologist consultation strongly advised
+                        - Systemic immunotherapy and JAK inhibitors
+                        - Comprehensive multi-modal treatment plan
+                        - Weekly/bi-weekly monitoring during treatment
+                        - Psychological counseling recommended
+                        - Screen for related autoimmune conditions
+                        """)
+            
+            # Educational sections
+            with st.expander("Understanding Your Results"):
+                st.markdown("""
+                Hair Classification System:
+                
+                - **Not Bald (Normal Hair):** Healthy scalp with uniform hair distribution
+                - **Bald (Alopecia Detected):** Presence of bald patches indicating alopecia areata
+                
+                Our system uses advanced AI and computer vision to analyze scalp images.
+                """)
+            
+            if results['is_bald'] and results['show_score']:
+                with st.expander("About SALT Score"):
+                    st.markdown("""
+                    The **Severity of Alopecia Tool (SALT)** is a standardized clinical scoring system:
                     
-                    Extensive hair loss detected requiring urgent intervention.
+                    Scalp Regions:
+                    - **Vertex (40%)** - Top of the scalp
+                    - **Frontal (18%)** - Front of scalp
+                    - **Temporal (16%)** - Sides of scalp
+                    - **Parietal (16%)** - Upper sides
+                    - **Occipital (10%)** - Back of scalp
                     
-                    **Urgent Actions Required:**
-                    - **Immediate dermatologist consultation strongly advised**
-                    - Systemic immunotherapy and JAK inhibitors
-                    - Comprehensive multi-modal treatment plan
-                    - Weekly/bi-weekly monitoring during treatment
-                    - Psychological counseling recommended
-                    - Screen for related autoimmune conditions
+                    Severity Levels:
+                    - **S1 (0-25%)**: Mild - Good prognosis with treatment
+                    - **S2 (25-50%)**: Moderate - Requires comprehensive care
+                    - **S3 (50-75%)**: Severe - Needs aggressive intervention
+                    - **S4 (75-100%)**: Very Severe - Extensive medical management
+                    
+                    The score helps doctors track progression and treatment effectiveness.
                     """)
-        
-        # Educational sections
-        with st.expander("Understanding Your Results"):
-            st.markdown("""
-            **Hair Classification System:**
             
-            - **Not Bald (Normal Hair):** Healthy scalp with uniform hair distribution
-            - **Bald (Alopecia Detected):** Presence of bald patches indicating alopecia areata
+            with st.expander("Follicle Density Analysis"):
+                st.markdown(f"""
+                Your Follicle Density: {results['follicle_density']} follicles/cm²
+                
+                Normal scalp follicle density ranges from 50-80 follicles per square centimeter.
+                
+                Density Ranges:
+                - **Normal:** 50-80/cm² - Healthy hair growth
+                - **Mild Reduction:** 35-50/cm² - Early changes
+                - **Moderate Reduction:** 20-35/cm² - Significant loss
+                - **Severe Reduction:** <20/cm² - Advanced hair loss
+                
+                {"Your density suggests potential hair thinning." if results['follicle_density'] < 50 else "Your density is within normal range."}
+                """)
             
-            Our system uses advanced AI and computer vision to analyze scalp images.
-            """)
-        
-        if results['is_bald'] and results['show_score']:
-            with st.expander("About SALT Score"):
+            if results['is_bald']:
+                with st.expander("Treatment Options"):
+                    st.markdown("""
+                    Common Treatment Approaches:
+                    
+                    Topical Treatments:
+                    - Corticosteroid creams and ointments
+                    - Minoxidil (Rogaine) solution
+                    - Anthralin cream
+                    - Topical immunotherapy (DPCP, SADBE)
+                    
+                    Injectable Treatments:
+                    - Intralesional corticosteroid injections
+                    - Platelet-rich plasma (PRP) therapy
+                    
+                    Systemic Medications:
+                    - Oral corticosteroids
+                    - JAK inhibitors (Baricitinib, Tofacitinib)
+                    - Methotrexate
+                    - Cyclosporine
+                    
+                    Note: Treatment choice depends on severity and individual factors. 
+                    Always consult with a board-certified dermatologist.
+                    """)
+            
+            with st.expander("About Alopecia Areata"):
                 st.markdown("""
-                The **Severity of Alopecia Tool (SALT)** is a standardized clinical scoring system:
+                What is Alopecia Areata?
                 
-                **Scalp Regions:**
-                - **Vertex (40%)** - Top of the scalp
-                - **Frontal (18%)** - Front of scalp
-                - **Temporal (16%)** - Sides of scalp
-                - **Parietal (16%)** - Upper sides
-                - **Occipital (10%)** - Back of scalp
+                Alopecia areata is an autoimmune condition where the immune system 
+                attacks hair follicles, causing hair loss.
                 
-                **Severity Levels:**
-                - **S1 (0-25%)**: Mild - Good prognosis with treatment
-                - **S2 (25-50%)**: Moderate - Requires comprehensive care
-                - **S3 (50-75%)**: Severe - Needs aggressive intervention
-                - **S4 (75-100%)**: Very Severe - Extensive medical management
+                Key Facts:
+                - Affects about 2% of the population
+                - Can occur at any age
+                - Not contagious or caused by stress alone
+                - Hair may regrow spontaneously
+                - Treatment can help stimulate regrowth
+                - Runs in families in about 20% of cases
                 
-                The score helps doctors track progression and treatment effectiveness.
+                When to See a Doctor:
+                - Sudden hair loss in patches
+                - Complete loss of scalp or body hair
+                - Rapid progression of hair loss
+                - Associated symptoms (itching, burning)
                 """)
         
-        with st.expander("Follicle Density Analysis"):
-            st.markdown(f"""
-            **Your Follicle Density:** {results['follicle_density']} follicles/cm²
-            
-            Normal scalp follicle density ranges from 50-80 follicles per square centimeter.
-            
-            **Density Ranges:**
-            - **Normal:** 50-80/cm² - Healthy hair growth
-            - **Mild Reduction:** 35-50/cm² - Early changes
-            - **Moderate Reduction:** 20-35/cm² - Significant loss
-            - **Severe Reduction:** <20/cm² - Advanced hair loss
-            
-            {"Your density suggests potential hair thinning." if results['follicle_density'] < 50 else "Your density is within normal range."}
-            """)
+        else:
+            st.info("No analysis available. Upload an image and click 'Analyze Image' to begin.")
         
-        if results['is_bald']:
-            with st.expander("Treatment Options"):
-                st.markdown("""
-                **Common Treatment Approaches:**
-                
-                **Topical Treatments:**
-                - Corticosteroid creams and ointments
-                - Minoxidil (Rogaine) solution
-                - Anthralin cream
-                - Topical immunotherapy (DPCP, SADBE)
-                
-                **Injectable Treatments:**
-                - Intralesional corticosteroid injections
-                - Platelet-rich plasma (PRP) therapy
-                
-                **Systemic Medications:**
-                - Oral corticosteroids
-                - JAK inhibitors (Baricitinib, Tofacitinib)
-                - Methotrexate
-                - Cyclosporine
-                
-                **Note:** Treatment choice depends on severity and individual factors. 
-                Always consult with a board-certified dermatologist.
-                """)
-        
-        with st.expander("About Alopecia Areata"):
-            st.markdown("""
-            **What is Alopecia Areata?**
-            
-            Alopecia areata is an autoimmune condition where the immune system 
-            attacks hair follicles, causing hair loss.
-            
-            **Key Facts:**
-            - Affects about 2% of the population
-            - Can occur at any age
-            - Not contagious or caused by stress alone
-            - Hair may regrow spontaneously
-            - Treatment can help stimulate regrowth
-            - Runs in families in about 20% of cases
-            
-            **When to See a Doctor:**
-            - Sudden hair loss in patches
-            - Complete loss of scalp or body hair
-            - Rapid progression of hair loss
-            - Associated symptoms (itching, burning)
-            """)
+        st.markdown('</div>', unsafe_allow_html=True)
     
-    else:
-        st.info("No analysis available. Upload an image and click 'Analyze Image' to begin.")
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# Footer
-st.markdown("""
-<div style="text-align: center; color: white; padding: 30px 20px; margin-top: 40px;">
-    <div style="font-size: 1.1em; font-weight: 600; margin-bottom: 10px;">
-        Medical Disclaimer
+    # Footer
+    st.markdown("""
+    <div style="text-align: center; color: white; padding: 30px 20px; margin-top: 40px;">
+        <div style="font-size: 1.1em; font-weight: 600; margin-bottom: 10px;">
+            Medical Disclaimer
+        </div>
+        <div style="opacity: 0.8; line-height: 1.8;">
+            This AI-powered system assists in alopecia areata assessment.<br>
+            It should NOT replace professional medical diagnosis and treatment.<br>
+            Always consult with a board-certified dermatologist for accurate diagnosis.
+        </div>
+        <div style="margin-top: 25px; opacity: 0.7; font-size: 0.85em;">
+            2025 Alopecia Areata Detection System | Developed by Sarthak Dhole<br>
+            Powered by Advanced AI & Computer Vision Technology
+        </div>
     </div>
-    <div style="opacity: 0.8; line-height: 1.8;">
-        This AI-powered system assists in alopecia areata assessment.<br>
-        It should NOT replace professional medical diagnosis and treatment.<br>
-        Always consult with a board-certified dermatologist for accurate diagnosis.
-    </div>
-    <div style="margin-top: 25px; opacity: 0.7; font-size: 0.85em;">
-        © 2025 Alopecia Areata Detection System | Developed by Sarthak Dhole<br>
-        Powered by Advanced AI & Computer Vision Technology
-    </div>
-</div>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
